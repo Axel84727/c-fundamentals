@@ -1,4 +1,3 @@
-cat > c-fundamentals/docs/PROGRESS.md << 'EOF'
 # Progress Tracker
 
 ## Week 1
@@ -28,17 +27,3 @@ cat > c-fundamentals/docs/PROGRESS.md << 'EOF'
 
 ### Next Steps
 - 
-EOF
-
-echo ""
-echo "✅ Setup complete!"
-echo ""
-echo "Next steps:"
-echo "1. cd c-fundamentals"
-echo "2. make              # Compile example exercises"
-echo "3. make run-01-basics/ex01_hello"
-echo "4. ./generate_exercise.sh 01-basics 04 calculator"
-echo ""
-echo "Directory structure created in: ./c-fundamentals"
-echo ""
-echo "Happy coding! 🚀"
