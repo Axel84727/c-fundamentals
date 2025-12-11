@@ -46,3 +46,99 @@ En vez de un archivo `EXERCISES.md`, se utiliza `PROGRESS.md` para llevar un reg
 ---
 
 Mantén el código en `src/` y usa `c-fundamentals/bin/` para ejecutar los ejercicios compilados.
+
+# C Fundamentals - Build & Usage
+
+Este repo contiene ejercicios en C organizados por secciones bajo `src/` y archivos de test en `tests/`.
+El sistema de build usa CMake y está diseñado para ser sencillo: compila por archivo, por sección o todo el proyecto y coloca los binarios en `c-fundamentals/bin/<section>/`.
+
+Rápido: pasos de instalación y uso
+
+1. Ejecuta el setup (una sola vez):
+
+```bash
+./setup.sh
+```
+
+Esto creará la estructura mínima, `c-fundamentals/CMakeLists.txt` (si no existía), `c-fundamentals/PROGRESS_TRACKER.md`, `c-fundamentals/scripts/clean_bins.sh` y el helper `build.sh` en la raíz.
+
+2. Compilar
+
+- Compilar todo:
+
+```bash
+./build.sh
+# o
+cmake --build build --target all_exercises
+```
+
+- Compilar una sección (por ejemplo `01-basics`):
+
+```bash
+./build.sh src/01-basics
+# o
+./build.sh 01-basics
+```
+
+- Compilar un archivo específico:
+
+```bash
+./build.sh src/01-basics/ex01.c
+# o
+./build.sh c-fundamentals/src/01-basics/ex01.c
+```
+
+3. Ejecutables resultantes
+
+Los binarios se colocan en: `c-fundamentals/bin/<section>/`.
+Ejemplo: `c-fundamentals/bin/01-basics/ex01`.
+
+4. Limpiar binarios
+
+```bash
+cmake --build build --target clean_bins
+# o ejecutar directamente
+./c-fundamentals/scripts/clean_bins.sh
+```
+
+Convenciones y detalles técnicos
+
+- Targets CMake generados:
+  - Ejecutables por archivo: `exercise_<section_safe>_<file_safe>` (ej. `exercise_01_basics_ex01`).
+  - Target por sección: `section_<section_safe>` (ej. `section_01_basics`).
+  - Target global: `all_exercises`.
+  - Target limpieza: `clean_bins`.
+- Normalización `safe`:
+  - Minusculas, caracteres no alfanuméricos reemplazados por `_`, trim de `_` inicial/final.
+
+Flags y configuración
+
+- Por defecto se configura `Release` con optimizaciones (`-O3 -march=native -flto -pipe`).
+- Puedes reconfigurar en modo `Debug` (símbolos y sin optimizaciones):
+
+```bash
+cmake -S c-fundamentals -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --target <target>
+```
+
+- Si tu sistema no soporta LTO o causa problemas, editar `CMakeLists.txt` y poner `option(ENABLE_LTO OFF)` o ejecutar cmake con `-DENABLE_LTO=OFF`.
+
+Notas importantes
+
+- Si añades o eliminas archivos `.c`, vuelve a ejecutar `./setup.sh` o `cmake -S c-fundamentals -B build` para que CMake regenere targets.
+- `build.sh` detecta `ninja` y lo usa si está disponible para builds más rápidos.
+- `clean_bins` borra únicamente ficheros ejecutables dentro de `c-fundamentals/bin/`.
+
+Checklist de pruebas (validación rápida)
+
+- [ ] Ejecutar `./setup.sh` → `build/` y `c-fundamentals/PROGRESS_TRACKER.md` deben existir.
+- [ ] `./build.sh src/01-basics/ex01.c` → binario `c-fundamentals/bin/01-basics/ex01` creado.
+- [ ] `./build.sh src/01-basics` → todos los ejecutables de `01-basics` creados en `c-fundamentals/bin/01-basics/`.
+- [ ] `./build.sh` → compila todas las secciones.
+- [ ] `cmake --build build --target clean_bins` → borra ejecutables en `c-fundamentals/bin/`.
+
+Si algo falla, revisa los mensajes de CMake y asegúrate de reconfigurar con `cmake -S c-fundamentals -B build`.
+
+Contribuciones
+
+Si quieres mejorar las convenciones, los flags o la estructura, abre una issue o PR con la propuesta.

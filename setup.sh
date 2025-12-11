@@ -1,504 +1,311 @@
 #!/bin/bash
-# Setup script para c-fundamentals repo
-# Crea estructura completa de directorios y archivos
+# Setup script para c-fundamentals repo (actualizado para CMake)
 
-set -e
+set -euo pipefail
 
-echo "🚀 Setting up c-fundamentals repository..."
+ROOT_DIR="$(pwd)"
+CF_DIR="${ROOT_DIR}/c-fundamentals"
+
+echo "🚀 Setting up c-fundamentals repository with CMake..."
 
 # Crear estructura de directorios
-mkdir -p c-fundamentals/{src,tests,bin,docs}
+mkdir -p "${CF_DIR}/src" "${CF_DIR}/tests" "${CF_DIR}/bin" "${CF_DIR}/docs" "${CF_DIR}/scripts"
 
-# Crear subdirectorios por nivel
-mkdir -p c-fundamentals/src/{01-basics,02-loops,03-arrays,04-strings,05-functions,06-pointers,07-structs}
+# Crear subdirectorios por nivel si no existen
+mkdir -p "${CF_DIR}/src/01-basics" "${CF_DIR}/src/02-loops" "${CF_DIR}/src/03-arrays" \
+         "${CF_DIR}/src/04-strings" "${CF_DIR}/src/05-functions" "${CF_DIR}/src/06-pointers" "${CF_DIR}/src/07-structs"
 
-# Crear CMakeLists.txt en lugar de Makefile
-cat > c-fundamentals/CMakeLists.txt << 'EOF'
-cmake_minimum_required(VERSION 3.15)
+# Copiar/crear CMakeLists.txt si no existe (si el usuario ya lo tiene, no sobrescribimos)
+if [ ! -f "${CF_DIR}/CMakeLists.txt" ]; then
+  cat > "${CF_DIR}/CMakeLists.txt" << 'EOF'
+cmake_minimum_required(VERSION 3.16)
 project(c_fundamentals C)
 
-# Requerir C99 y opciones de compilación similares a las del Makefile original
+# Opciones configurables
+option(ENABLE_LTO "Enable link-time optimization (LTO)" ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (Debug/Release)" FORCE)
+endif()
+
+# Estándar C
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-add_compile_options(-Wall -Wextra -Werror -pedantic -g)
 
-# Buscar recursivamente todos los .c en src/
-file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c)
+# Flags recomendados
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0 -DDEBUG -Wall -Wextra -pedantic")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -march=native -pipe -Wall -Wextra -pedantic")
+if(ENABLE_LTO)
+  string(APPEND CMAKE_C_FLAGS_RELEASE " -flto")
+endif()
 
-# Para cada fuente, crear un ejecutable con nombre seguro basado en la ruta relativa
-foreach(src IN LISTS SRC_FILES)
-  file(RELATIVE_PATH rel ${CMAKE_SOURCE_DIR}/src ${src})
-  # Reemplazar separadores por '_' y quitar la extensión
-  string(REGEX REPLACE "[/\\\\]" "_" target_name ${rel})
-  string(REGEX REPLACE "\\.c$" "" target_name ${target_name})
-  # Reemplazar guiones por '_' para evitar posibles problemas en nombres de targets
-  string(REGEX REPLACE "-" "_" target_name ${target_name})
-  add_executable(${target_name} ${src})
-  # Volcar binarios en el directorio bin/ del proyecto (no en build/)
-  set_target_properties(${target_name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
-endforeach()
+# Helper: normalizar nombres a un identificador seguro para targets
+function(make_safe_name out input)
+  string(TOLOWER "${input}" _tmp)
+  # Reemplazar cualquier caracter no alfanumérico por '_'
+  string(REGEX REPLACE "[^a-z0-9]+" "_" _tmp "${_tmp}")
+  # Eliminar guiones bajos iniciales/finales
+  string(REGEX REPLACE "^_+|_+$" "" _tmp "${_tmp}")
+  set(${out} "${_tmp}" PARENT_SCOPE)
+endfunction()
 
-# Target de conveniencia para compilar todo rápidamente
-add_custom_target(build_all DEPENDS ${PROJECT_NAME} ALL)
+# Recolectar fuentes por sección (solo subdirectorios inmediatos de src/ y tests/)
+set(PROJECT_ROOT ${CMAKE_SOURCE_DIR})
+set(SRC_ROOT ${PROJECT_ROOT}/src)
+set(TESTS_ROOT ${PROJECT_ROOT}/tests)
+
+# Lista para targets por sección
+set(ALL_SECTION_TARGETS "")
+set(ALL_EXERCISE_TARGETS "")
+
+# Función para procesar un directorio de sección dado (base puede ser src o tests)
+function(process_section base_dir rel_dir)
+  set(section_dir "${base_dir}/${rel_dir}")
+  if(NOT IS_DIRECTORY ${section_dir})
+    return()
+  endif()
+
+  # Obtener todos los .c en la sección
+  file(GLOB SECTION_SOURCES CONFIGURE_DEPENDS "${section_dir}/*.c")
+  if(SECTION_SOURCES)
+    # Normalizar nombre de sección
+    make_safe_name(section_safe "${rel_dir}")
+    set(section_target_name "section_${section_safe}")
+    set(section_bin_dir "${PROJECT_ROOT}/bin/${rel_dir}")
+
+    set(section_exercise_targets "")
+    foreach(src IN LISTS SECTION_SOURCES)
+      # Nombre seguro del archivo (incluye sección para evitar colisiones)
+      get_filename_component(src_basename ${src} NAME_WE)
+      make_safe_name(src_safe "${src_basename}")
+      make_safe_name(sec_safe_for_name "${rel_dir}")
+      set(exercise_target "exercise_${sec_safe_for_name}_${src_safe}")
+
+      add_executable(${exercise_target} "${src}")
+
+      # Establecer directorio de salida por sección
+      set_target_properties(${exercise_target} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${PROJECT_ROOT}/bin/${rel_dir}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${PROJECT_ROOT}/bin/${rel_dir}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_ROOT}/bin/${rel_dir}"
+      )
+
+      list(APPEND section_exercise_targets ${exercise_target})
+      list(APPEND ALL_EXERCISE_TARGETS ${exercise_target})
+    endforeach()
+
+    # Target de sección que depende de todos los ejecutables de la sección
+    add_custom_target(${section_target_name} DEPENDS ${section_exercise_targets})
+    list(APPEND ALL_SECTION_TARGETS ${section_target_name})
+  endif()
+endfunction()
+
+# Procesar subdirectorios inmediatos dentro de src/
+if(EXISTS ${SRC_ROOT})
+  file(GLOB SRCDIRS RELATIVE ${SRC_ROOT} ${SRC_ROOT}/*)
+  foreach(d IN LISTS SRCDIRS)
+    if(IS_DIRECTORY ${SRC_ROOT}/${d})
+      process_section(${SRC_ROOT} ${d})
+    endif()
+  endforeach()
+endif()
+
+# Procesar subdirectorios inmediatos dentro de tests/
+if(EXISTS ${TESTS_ROOT})
+  file(GLOB TESTDIRS RELATIVE ${TESTS_ROOT} ${TESTS_ROOT}/*)
+  foreach(d IN LISTS TESTDIRS)
+    if(IS_DIRECTORY ${TESTS_ROOT}/${d})
+      process_section(${TESTS_ROOT} ${d})
+    endif()
+  endforeach()
+  # También procesar archivos sueltos en tests/ (sin subdir)
+  file(GLOB TEST_FILES CONFIGURE_DEPENDS "${TESTS_ROOT}/*.c")
+  foreach(tf IN LISTS TEST_FILES)
+    get_filename_component(tf_basename ${tf} NAME_WE)
+    make_safe_name(tf_safe "${tf_basename}")
+    set(ex_target "exercise_tests_${tf_safe}")
+    add_executable(${ex_target} "${tf}")
+    set_target_properties(${ex_target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_ROOT}/bin/tests")
+    list(APPEND ALL_EXERCISE_TARGETS ${ex_target})
+  endforeach()
+endif()
+
+# Target global que construye todas las secciones encontradas
+if(ALL_SECTION_TARGETS)
+  add_custom_target(all_exercises DEPENDS ${ALL_SECTION_TARGETS})
+else()
+  # Si no hay secciones, crear target que dependa de todos los ejercicios encontrados
+  if(ALL_EXERCISE_TARGETS)
+    add_custom_target(all_exercises DEPENDS ${ALL_EXERCISE_TARGETS})
+  endif()
+endif()
+
+# Target para limpiar binarios (invoca script seguro)
+add_custom_target(clean_bins
+  COMMAND ${CMAKE_COMMAND} -E echo "Cleaning binaries in ${PROJECT_ROOT}/bin/..."
+  COMMAND ${CMAKE_COMMAND} -E env bash "${PROJECT_ROOT}/scripts/clean_bins.sh"
+  WORKING_DIRECTORY ${PROJECT_ROOT}
+)
+
+message(STATUS "Configured c-fundamentals: found ${ALL_EXERCISE_TARGETS} exercises and ${ALL_SECTION_TARGETS} section targets")
+
+# Nota: cuando se añaden/ eliminan archivos .c puede ser necesario volver a ejecutar 'cmake -S . -B build' para actualizar la lista de targets.
 EOF
+else
+  echo "CMakeLists.txt already exists in ${CF_DIR}, skipping overwrite"
+fi
 
-# Crear README.md (actualizado para CMake)
-cat > c-fundamentals/README.md << 'EOF'
-# C Fundamentals - 108 Exercises
+# Crear README.md si no existe (actualizaremos después si ya existe)
+if [ ! -f "${CF_DIR}/README.md" ]; then
+  cat > "${CF_DIR}/README.md" << 'EOF'
+# C Fundamentals - Build & Usage
 
-Colección de ejercicios en C, organizados por niveles.
+Este proyecto usa CMake para compilar ejercicios individuales o por secciones.
 
-## Estructura
-
-```
-c-fundamentals/
-├── src/
-│   ├── 01-basics/      # Exercises 1-18
-│   ├── 02-loops/       # Exercises 19-36
-│   ├── 03-arrays/      # Exercises 37-56
-│   ├── 04-strings/     # Exercises 57-72
-│   ├── 05-functions/   # Exercises 73-86
-│   ├── 06-pointers/    # Exercises 87-97
-│   └── 07-structs/     # Exercises 98-108
-├── bin/                # Binaries generated by CMake (RUNTIME_OUTPUT_DIRECTORY)
-├── tests/              # Test files (opcional)
-└── docs/               # Notas y documentación
-```
-
-## Construcción (CMake)
-
-Se recomienda usar una carpeta `build/` fuera del árbol de fuentes para compilar.
+Quick start:
 
 ```bash
-# Desde la raíz del proyecto
-mkdir -p build && cd build
-cmake ../c-fundamentals
-cmake --build . -- -j
-
-# Los binarios se colocan en c-fundamentals/bin
-ls ../c-fundamentals/bin
+./setup.sh           # configura build/ y crea PROGRESS_TRACKER.md
+./build.sh           # compila todos los ejercicios (equivalente a "all_exercises")
+./build.sh src/01-basics           # compila la sección 01-basics
+./build.sh src/01-basics/ex01.c   # compila ese archivo específico
+cmake --build build --target clean_bins   # elimina binarios generados
 ```
 
-## Uso rápido
+Los binarios se colocan en `c-fundamentals/bin/<section>/` según la carpeta del archivo.
 
-- Compilar todo: `cmake --build .`
-- Ejecutable ejemplo (nombre generado según la ruta fuente):
-  - `c-fundamentals/bin/01_basics_ex01` (ejemplo: el nombre usa `_` en vez de `/` y sin extensión)
-
-## Progreso / Anotaciones
-
-En vez de un archivo `EXERCISES.md`, se utiliza `PROGRESS.md` para llevar un registro de avances y notas.
-
----
-
-Mantén el código en `src/` y usa `c-fundamentals/bin/` para ejecutar los ejercicios compilados.
+Para más detalles, edita o revisa este README.
 EOF
+else
+  echo "README.md already exists in ${CF_DIR}, skipping overwrite"
+fi
 
-# Crear .gitignore
-cat > c-fundamentals/.gitignore << 'EOF'
-# Compiled binaries
-bin/
-*.o
-*.out
-*.exe
+# Crear scripts/clean_bins.sh si no existe
+if [ ! -f "${CF_DIR}/scripts/clean_bins.sh" ]; then
+  cat > "${CF_DIR}/scripts/clean_bins.sh" << 'EOF'
+#!/usr/bin/env bash
+# Eliminación segura de ficheros ejecutables dentro de bin/
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BIN_DIR="${ROOT}/bin"
 
-# Debug files
-*.dSYM/
-*.gch
-*.pch
+if [ ! -d "${BIN_DIR}" ]; then
+  echo "No bin/ directory found, nothing to clean."
+  exit 0
+fi
 
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+echo "Cleaning executable files in ${BIN_DIR}..."
+# Encontrar y borrar archivos regulares con bit ejecutable
+# -maxdepth 3 limita alcance por seguridad
+find "${BIN_DIR}" -type f -perm /111 -print -delete || true
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Test outputs
-*.log
-core
-vgcore.*
+echo "Done."
 EOF
+  chmod +x "${CF_DIR}/scripts/clean_bins.sh"
+else
+  echo "scripts/clean_bins.sh already exists, skipping"
+fi
 
-# Crear template para ejercicios
-cat > c-fundamentals/docs/TEMPLATE.c << 'EOF'
-/**
- * Exercise XX: [Title]
- * 
- * Description:
- *   [What this exercise does]
- *
- * Input:
- *   [Expected input]
- *
- * Output:
- *   [Expected output]
- *
- * Example:
- *   Input:  [example input]
- *   Output: [example output]
- *
- * Difficulty: [Easy/Medium/Hard]
- * Time: [Estimated time to complete]
- */
+# Crear build helper simple si no existe
+if [ ! -f "${ROOT_DIR}/build.sh" ]; then
+  cat > "${ROOT_DIR}/build.sh" << 'EOF'
+#!/usr/bin/env bash
+# Simple build helper: usage ./build.sh [path|section|file]
+set -euo pipefail
 
-#include <stdio.h>
-#include <stdlib.h>
+ROOT_DIR="$(pwd)"
+PROJECT_DIR="${ROOT_DIR}/c-fundamentals"
+BUILD_DIR="${ROOT_DIR}/build"
 
-int main(void) {
-    // Your code here
-    
-    return 0;
+# Detect number of cores on macOS
+NUM_CORES=1
+if command -v sysctl >/dev/null 2>&1; then
+  NUM_CORES=$(sysctl -n hw.ncpu || echo 1)
+fi
+
+# Ensure build directory is configured
+function configure_cmake() {
+  mkdir -p "${BUILD_DIR}"
+  # Prefer Ninja if available
+  if command -v ninja >/dev/null 2>&1; then
+    cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=Release
+  else
+    cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release
+  fi
 }
+
+if [ ! -d "${BUILD_DIR}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+  echo "Configuring CMake..."
+  configure_cmake
+fi
+
+ARG="${1:-all}"
+if [ "${ARG}" = "all" ] || [ -z "${ARG}" ]; then
+  TARGET="all_exercises"
+else
+  # If arg is a directory inside c-fundamentals/src or c-fundamentals/tests -> section
+  if [ -d "${PROJECT_DIR}/${ARG}" ]; then
+    # ARG puede ser como src/01-basics o 01-basics
+    # Normalizar a la ruta relativa dentro de project
+    REL=$(realpath --relative-to="${PROJECT_DIR}" "${PROJECT_DIR}/${ARG}" 2>/dev/null || echo "${ARG}")
+    # Reemplazar '/' por '_' y limpiar caracteres no alfanuméricos para mapear al target
+    SAFE=$(echo "${REL}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g' | sed -E 's/^_+|_+$//g')
+    TARGET="section_${SAFE}"
+  elif [ -f "${PROJECT_DIR}/${ARG}" ]; then
+    # Archivo específico
+    BASENAME=$(basename "${ARG}" .c)
+    DIRNAME=$(dirname "${ARG}")
+    RELDIR=$(realpath --relative-to="${PROJECT_DIR}" "${PROJECT_DIR}/${DIRNAME}" 2>/dev/null || echo "${DIRNAME}")
+    SAFE_DIR=$(echo "${RELDIR}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g' | sed -E 's/^_+|_+$//g')
+    SAFE_FILE=$(echo "${BASENAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g' | sed -E 's/^_+|_+$//g')
+    TARGET="exercise_${SAFE_DIR}_${SAFE_FILE}"
+  else
+    # Fallback: intentar mapear input como sección nombre solo
+    SAFE=$(echo "${ARG}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g' | sed -E 's/^_+|_+$//g')
+    TARGET="section_${SAFE}"
+  fi
+fi
+
+echo "Building target: ${TARGET}"
+cmake --build "${BUILD_DIR}" --target "${TARGET}" -- -j${NUM_CORES}
 EOF
+  chmod +x "${ROOT_DIR}/build.sh"
+else
+  echo "build.sh already exists, skipping"
+fi
 
-# Generar archivo de progreso/tracker (en lugar de EXERCISES.md)
-cat > c-fundamentals/PROGRESS.md << 'EOF'
-# Progress / Anotaciones
+# Crear PROGRESS_TRACKER.md en la raíz del proyecto (no sobrescribir si existe)
+if [ ! -f "${CF_DIR}/PROGRESS_TRACKER.md" ]; then
+  cat > "${CF_DIR}/PROGRESS_TRACKER.md" << 'EOF'
+# PROGRESS_TRACKER / ANOTACIONES
 
-Este archivo sirve como tracker de progreso y lugar para notas rápidas.
+Usa este archivo para llevar un registro ligero de tu progreso.
 
 Formato sugerido:
 
-- Fecha - Nivel - ejercicio - estado - notas
+| Fecha | Sección | Ejercicio | Estado | Notas |
+|-------|---------|-----------|--------|-------|
+| 2025-12-11 | 01-basics | ex01 | hecho | Implementado "Hello World" |
 
-Ejemplo:
-- 2025-12-11 - 01-basics ex01 - hecho - Implementado "Hello World"
-- 2025-12-12 - 02-loops ex19 - pendiente - revisar caso N=0
-
-Puedes usar `docs/PROGRESS.md` para notas más largas por sesión o tema.
-
----
-
-¡Buena práctica! Mantén actualizadas las entradas para seguir el progreso.
+Puedes mantener notas por sección en `docs/PROGRESS.md` si necesitas más detalle.
 EOF
-
-# Generate ALL 108 exercise templates with correct titles
-echo "Generating 108 exercise templates..."
-
-# Define all exercise titles
-declare -a exercises=(
-    # Level 1: Basics (1-18)
-    "Hello World"
-    "Variables básicas"
-    "Suma de dos números"
-    "Calculadora básica"
-    "Celsius a Fahrenheit"
-    "Área de círculo"
-    "Intercambiar variables"
-    "Mayor de 3"
-    "Par o impar"
-    "Año bisiesto"
-    "Calificación con letras"
-    "Calculadora con switch"
-    "Días del mes"
-    "Calculadora de IMC"
-    "Descuento en tienda"
-    "Suma de 1 a N"
-    "Tabla de multiplicar"
-    "Factorial"
-    # Level 2: Loops (19-36)
-    "Número primo"
-    "Fibonacci hasta N"
-    "Invertir número"
-    "Palíndromo numérico"
-    "Suma de dígitos"
-    "Número Armstrong"
-    "MCD (Máximo Común Divisor)"
-    "MCM (Mínimo Común Múltiplo)"
-    "Potencia"
-    "Patrón de asteriscos"
-    "Patrón numérico"
-    "Números perfectos"
-    "Adivina el número"
-    "Tabla ASCII"
-    "Binario a decimal"
-    "Decimal a binario"
-    "Serie matemática"
-    "Contar vocales y consonantes"
-    # Level 3: Arrays (37-56)
-    "Suma de elementos"
-    "Máximo y mínimo"
-    "Promedio"
-    "Invertir array"
-    "Búsqueda lineal"
-    "Búsqueda binaria"
-    "Ordenamiento burbuja"
-    "Ordenamiento por selección"
-    "Ordenamiento por inserción"
-    "Eliminar duplicados"
-    "Rotación de array"
-    "Fusionar arrays ordenados"
-    "Segundo elemento más grande"
-    "Frecuencia de elementos"
-    "Separar pares e impares"
-    "Transponer matriz"
-    "Suma de matrices"
-    "Multiplicación de matrices"
-    "Matriz identidad"
-    "Determinante 2x2"
-    # Level 4: Strings (57-72)
-    "Longitud de string (sin strlen)"
-    "Copiar string (sin strcpy)"
-    "Concatenar strings (sin strcat)"
-    "Comparar strings (sin strcmp)"
-    "Invertir string"
-    "Palíndromo de string"
-    "Contar palabras"
-    "Mayúsculas/minúsculas"
-    "Eliminar espacios"
-    "Anagrama"
-    "Primer carácter no repetido"
-    "Comprimir string"
-    "Validar email"
-    "Cifrado César"
-    "Subcadena sin repetir"
-    "Tokenizar string"
-    # Level 5: Functions (73-86)
-    "Factorial recursivo"
-    "Fibonacci recursivo"
-    "Suma de dígitos recursivo"
-    "Torre de Hanoi"
-    "Potencia recursiva"
-    "MCD recursivo"
-    "Búsqueda binaria recursiva"
-    "Invertir string recursivo"
-    "Binario recursivo"
-    "Suma de array recursivo"
-    "Palíndromo recursivo"
-    "Caminos en cuadrícula"
-    "Permutaciones"
-    "Subsecuencia creciente"
-    # Level 6: Pointers (87-97)
-    "Swap con punteros"
-    "Suma con punteros"
-    "Invertir con punteros"
-    "String length con punteros"
-    "Copiar string con punteros"
-    "Array dinámico"
-    "Redimensionar array"
-    "Calculadora con callbacks"
-    "Array de strings"
-    "Matriz dinámica 2D"
-    "Punteros a estructuras"
-    # Level 7: Structs (98-108)
-    "Estructura Punto"
-    "Estructura Fecha"
-    "Estructura Estudiante"
-    "Lista de contactos"
-    "Sistema de inventario"
-    "Escribir/leer archivo texto"
-    "Contar líneas/palabras"
-    "Copiar archivo"
-    "Agenda con archivo"
-    "Sistema de estudiantes con archivo"
-    "Estadísticas de archivo"
-)
-
-# Function to create exercise file
-create_exercise() {
-    local num=$1
-    local title=$2
-    local dir=$3
-    local filename=$4
-
-    # Asegurar que el directorio exista
-    mkdir -p "$dir"
-
-    cat > "$filename" << EOF
-/**
- * Exercise ${num}: ${title}
- * 
- * Description:
- *   See EXERCISES.md for detailed description
- *
- * TODO: Implement this exercise
- */
-
-#include <stdio.h>
-#include <stdlib.h>
-
-int main(void) {
-    // Your code here
-    
-    return 0;
-}
-EOF
-}
-
-# Generate exercises for each level
-idx=0
-
-# Level 1: Basics (1-18)
-for i in {01..18}; do
-    num=$((10#$i))  # Remove leading zero for array index
-    create_exercise "$i" "${exercises[$idx]}" "c-fundamentals/src/01-basics" "c-fundamentals/src/01-basics/ex${i}.c"
-    ((idx++))
-done
-
-# Level 2: Loops (19-36)
-for i in {19..36}; do
-    create_exercise "$i" "${exercises[$idx]}" "c-fundamentals/src/02-loops" "c-fundamentals/src/02-loops/ex${i}.c"
-    ((idx++))
-done
-
-# Level 3: Arrays (37-56)
-for i in {37..56}; do
-    create_exercise "$i" "${exercises[$idx]}" "c-fundamentals/src/03-arrays" "c-fundamentals/src/03-arrays/ex${i}.c"
-    ((idx++))
-done
-
-# Level 4: Strings (57-72)
-for i in {57..72}; do
-    cat > "c-fundamentals/src/04-strings/ex${i}.c" << EOF
-/**
- * Exercise ${i}: ${exercises[$idx]}
- * 
- * Description:
- *   See EXERCISES.md for detailed description
- *
- * TODO: Implement this exercise
- */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-int main(void) {
-    // Your code here
-    
-    return 0;
-}
-EOF
-    ((idx++))
-done
-
-# Level 5: Functions (73-86)
-for i in {73..86}; do
-    create_exercise "$i" "${exercises[$idx]}" "c-fundamentals/src/05-functions" "c-fundamentals/src/05-functions/ex${i}.c"
-    ((idx++))
-done
-
-# Level 6: Pointers (87-97)
-for i in {87..97}; do
-    create_exercise "$i" "${exercises[$idx]}" "c-fundamentals/src/06-pointers" "c-fundamentals/src/06-pointers/ex${i}.c"
-    ((idx++))
-done
-
-# Level 7: Structs (98-108)
-for i in {98..108}; do
-    num=$(printf "%03d" $i)
-    create_exercise "$num" "${exercises[$idx]}" "c-fundamentals/src/07-structs" "c-fundamentals/src/07-structs/ex${num}.c"
-    ((idx++))
-done
-
-echo "✓ Created ALL 108 exercise templates with titles!"
-echo "  01-basics:    18 files (ex01.c - ex18.c)"
-echo "  02-loops:     18 files (ex19.c - ex36.c)"
-echo "  03-arrays:    20 files (ex37.c - ex56.c)"
-echo "  04-strings:   16 files (ex57.c - ex72.c)"
-echo "  05-functions: 14 files (ex73.c - ex86.c)"
-echo "  06-pointers:  11 files (ex87.c - ex97.c)"
-echo "  07-structs:   11 files (ex098.c - ex108.c)"
-
-# Crear script generador de ejercicios
-cat > c-fundamentals/generate_exercise.sh << 'EOF'
-#!/bin/bash
-# Generate template for new exercise
-
-if [ $# -ne 3 ]; then
-    echo "Usage: $0 <level> <number> <title>"
-    echo "Example: $0 01-basics 04 calculator"
-    exit 1
+else
+  echo "PROGRESS_TRACKER.md already exists, skipping"
 fi
 
-LEVEL=$1
-NUM=$2
-TITLE=$3
+# Mensaje final
+cat << EOF
 
-FILENAME="src/${LEVEL}/ex${NUM}_${TITLE}.c"
+✅ Setup complete!
 
-if [ -f "$FILENAME" ]; then
-    echo "Error: File $FILENAME already exists"
-    exit 1
-fi
+Siguientes pasos rápidos:
+  1) ./build.sh            # compila todo
+  2) ./build.sh src/01-basics         # compila sección
+  3) ./build.sh src/01-basics/ex01.c # compila archivo específico
+  4) cmake --build build --target clean_bins  # limpia binarios
 
-cat > "$FILENAME" << TEMPLATE
-/**
- * Exercise ${NUM}: ${TITLE^}
- * 
- * Description:
- *   TODO: Add description
- *
- * Input:
- *   TODO: Describe input
- *
- * Output:
- *   TODO: Describe output
- */
+Los binarios se colocan en: c-fundamentals/bin/<section>/*. Ejecutables tienen permisos de ejecución.
 
-#include <stdio.h>
-#include <stdlib.h>
+Si añades o eliminas archivos .c, vuelve a ejecutar: cmake -S c-fundamentals -B build
 
-int main(void) {
-    // TODO: Implement exercise
-    
-    return 0;
-}
-TEMPLATE
-
-echo "✓ Created: $FILENAME"
-echo "Edit the file and implement the exercise!"
 EOF
 
-chmod +x c-fundamentals/generate_exercise.sh
-
-# Crear/actualizar docs/PROGRESS.md (detalle por sesiones)
-cat > c-fundamentals/docs/PROGRESS.md << 'EOF'
-# Progress Tracker
-
-## Week 1
-
-### Day 1 (Exercises 1-10)
-- [ ] 01. Hello World
-- [ ] 02. Variables básicas
-- [ ] 03. Suma de dos números
-- [ ] 04. Calculadora básica
-- [ ] 05. Celsius a Fahrenheit
-- [ ] 06. Área de círculo
-- [ ] 07. Intercambiar variables
-- [ ] 08. Mayor de 3
-- [ ] 09. Par o impar
-- [ ] 10. Año bisiesto
-
-### Day 2 (Exercises 11-20)
-...
-
-## Notes
-
-### Lessons Learned
-- 
-
-### Challenges Faced
-- 
-
-### Next Steps
-- 
-EOF
-
-echo ""
-echo "✅ Setup complete!"
-echo ""
-echo "Next steps:"
-echo "1. mkdir -p build && cd build"
-echo "2. cmake ../c-fundamentals"
-echo "3. cmake --build . -- -j   # compila todos los ejercicios"
-echo "4. ls ../c-fundamentals/bin && ../c-fundamentals/bin/<nombre_del_ejecutable>"
-echo ""
-echo "Directory structure created in: ./c-fundamentals"
-echo ""
-echo "Happy coding! 🚀"
