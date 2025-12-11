@@ -1,0 +1,26 @@
+# Compiled binaries
+bin/
+*.o
+*.out
+*.exe
+
+# Debug files
+*.dSYM/
+*.gch
+*.pch
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.log
+core
+vgcore.*
