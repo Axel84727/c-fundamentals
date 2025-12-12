@@ -12,6 +12,6 @@
 
 int main(void) {
     // Your code here
-    
+    printf("hello world\n");
     return 0;
 }
